@@ -20,6 +20,8 @@ import ast
 import json
 import operator
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -47,7 +49,11 @@ Available tools:
    returns: arithmetic evaluation result, or structured error string.
    supports numbers, parentheses, spaces, decimals, and + - * / // % **.
 
-5) echo
+5) powershell_access
+   arguments: {"command": string (required)}
+   returns: stdout/stderr from PowerShell execution, or structured error string.
+
+6) echo
    arguments: {"text": string (required)}
    returns: same text.
 
@@ -385,6 +391,49 @@ def internet_search(query: str) -> str:
     return "Internet search results:\n" + "\n".join(lines[:4])
 
 
+def powershell_access(command: str, timeout_s: int = 20) -> str:
+    """
+    Execute a PowerShell command and return combined stdout/stderr text.
+    """
+    cmd = command.strip()
+    if not cmd:
+        return 'ERROR: "command" is required and must be a non-empty string'
+
+    powershell_bin = shutil.which("pwsh") or shutil.which("powershell")
+    if not powershell_bin:
+        return "ERROR: PowerShell executable not found (expected pwsh or powershell)"
+
+    try:
+        completed = subprocess.run(
+            [powershell_bin, "-NoProfile", "-Command", cmd],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return f"ERROR: PowerShell command timed out after {timeout_s} seconds"
+    except Exception as exc:
+        return f"ERROR: failed to execute PowerShell command ({exc})"
+
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
+
+    parts: list[str] = []
+    if stdout:
+        parts.append(f"stdout:\n{stdout}")
+    if stderr:
+        parts.append(f"stderr:\n{stderr}")
+    if not parts:
+        parts.append("stdout:\n<empty>")
+
+    result = "\n\n".join(parts)
+    # Keep tool payload manageable.
+    if len(result) > 4000:
+        result = result[:4000] + "\n...<truncated>"
+    return result
+
+
 ALLOWED_BIN_OPS: dict[type[ast.AST], Any] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -489,6 +538,12 @@ def execute_tool(tool: str, arguments: dict[str, Any] | None) -> str:
         if not isinstance(city, str):
             return 'ERROR: "city" is required and must be a string'
         return get_weather(city)
+
+    if tool == "powershell_access":
+        command = args.get("command")
+        if not isinstance(command, str):
+            return 'ERROR: "command" is required and must be a string'
+        return powershell_access(command)
 
     if tool == "echo":
         text = args.get("text")
