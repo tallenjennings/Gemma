@@ -34,12 +34,16 @@ Available tools:
    arguments: {"timezone": string (optional, default "UTC")}
    returns: current time in ISO format for the timezone, or structured error string.
 
-2) calculator
+2) get_weather
+   arguments: {"city": string (required)}
+   returns: current weather summary for that city, or structured error string.
+
+3) calculator
    arguments: {"expression": string (required)}
    returns: arithmetic evaluation result, or structured error string.
    supports numbers, parentheses, spaces, decimals, and + - * / // % **.
 
-3) echo
+4) echo
    arguments: {"text": string (required)}
    returns: same text.
 
@@ -196,6 +200,117 @@ def get_current_time(timezone: str = "UTC") -> str:
     return now.isoformat()
 
 
+WEATHER_CODE_DESCRIPTIONS: dict[int, str] = {
+    0: "clear sky",
+    1: "mainly clear",
+    2: "partly cloudy",
+    3: "overcast",
+    45: "fog",
+    48: "depositing rime fog",
+    51: "light drizzle",
+    53: "moderate drizzle",
+    55: "dense drizzle",
+    56: "light freezing drizzle",
+    57: "dense freezing drizzle",
+    61: "slight rain",
+    63: "moderate rain",
+    65: "heavy rain",
+    66: "light freezing rain",
+    67: "heavy freezing rain",
+    71: "slight snow fall",
+    73: "moderate snow fall",
+    75: "heavy snow fall",
+    77: "snow grains",
+    80: "slight rain showers",
+    81: "moderate rain showers",
+    82: "violent rain showers",
+    85: "slight snow showers",
+    86: "heavy snow showers",
+    95: "thunderstorm",
+    96: "thunderstorm with slight hail",
+    99: "thunderstorm with heavy hail",
+}
+
+
+def get_weather(city: str) -> str:
+    """Return current weather summary for a city via Open-Meteo APIs."""
+    city_name = city.strip()
+    if not city_name:
+        return 'ERROR: "city" is required and must be a non-empty string'
+
+    geocode_url = "https://geocoding-api.open-meteo.com/v1/search"
+    forecast_url = "https://api.open-meteo.com/v1/forecast"
+
+    try:
+        geocode_resp = requests.get(
+            geocode_url,
+            params={"name": city_name, "count": 1, "language": "en", "format": "json"},
+            timeout=20,
+        )
+        geocode_resp.raise_for_status()
+        geocode_data = geocode_resp.json()
+    except requests.RequestException as exc:
+        return f"ERROR: weather geocoding request failed ({exc})"
+    except ValueError:
+        return "ERROR: weather geocoding returned invalid JSON"
+
+    results = geocode_data.get("results")
+    if not isinstance(results, list) or not results:
+        return f'ERROR: city "{city_name}" not found'
+
+    location = results[0]
+    name = location.get("name")
+    latitude = location.get("latitude")
+    longitude = location.get("longitude")
+    country = location.get("country")
+
+    if not isinstance(name, str) or not isinstance(latitude, (int, float)) or not isinstance(
+        longitude, (int, float)
+    ):
+        return "ERROR: geocoding response missing required location fields"
+
+    try:
+        weather_resp = requests.get(
+            forecast_url,
+            params={
+                "latitude": latitude,
+                "longitude": longitude,
+                "current": "temperature_2m,wind_speed_10m,weather_code",
+            },
+            timeout=20,
+        )
+        weather_resp.raise_for_status()
+        weather_data = weather_resp.json()
+    except requests.RequestException as exc:
+        return f"ERROR: weather forecast request failed ({exc})"
+    except ValueError:
+        return "ERROR: weather forecast returned invalid JSON"
+
+    current = weather_data.get("current")
+    if not isinstance(current, dict):
+        return "ERROR: weather forecast missing current conditions"
+
+    temperature = current.get("temperature_2m")
+    wind_speed = current.get("wind_speed_10m")
+    weather_code = current.get("weather_code")
+
+    if not isinstance(temperature, (int, float)) or not isinstance(wind_speed, (int, float)):
+        return "ERROR: weather forecast missing temperature or wind speed"
+
+    if isinstance(weather_code, int):
+        weather_desc = WEATHER_CODE_DESCRIPTIONS.get(weather_code, f"code {weather_code}")
+    else:
+        weather_desc = "unknown conditions"
+
+    location_label = f"{name}, {country}" if isinstance(country, str) and country else name
+    return (
+        f"Current weather in {location_label}: "
+        f"{float(temperature):.1f} C, "
+        f"wind {float(wind_speed):.1f} km/h, "
+        f"{weather_desc}."
+    )
+
+
 ALLOWED_BIN_OPS: dict[type[ast.AST], Any] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -288,6 +403,12 @@ def execute_tool(tool: str, arguments: dict[str, Any] | None) -> str:
         if not isinstance(expression, str):
             return 'ERROR: "expression" is required and must be a string'
         return safe_calculate(expression)
+
+    if tool == "get_weather":
+        city = args.get("city")
+        if not isinstance(city, str):
+            return 'ERROR: "city" is required and must be a string'
+        return get_weather(city)
 
     if tool == "echo":
         text = args.get("text")
