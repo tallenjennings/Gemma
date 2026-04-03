@@ -38,12 +38,16 @@ Available tools:
    arguments: {"city": string (required)}
    returns: current weather summary for that city, or structured error string.
 
-3) calculator
+3) internet_search
+   arguments: {"query": string (required)}
+   returns: concise internet search summary with top results, or structured error string.
+
+4) calculator
    arguments: {"expression": string (required)}
    returns: arithmetic evaluation result, or structured error string.
    supports numbers, parentheses, spaces, decimals, and + - * / // % **.
 
-4) echo
+5) echo
    arguments: {"text": string (required)}
    returns: same text.
 
@@ -311,6 +315,76 @@ def get_weather(city: str) -> str:
     )
 
 
+def internet_search(query: str) -> str:
+    """
+    Search the internet via DuckDuckGo Instant Answer API and return concise results.
+    """
+    text = query.strip()
+    if not text:
+        return 'ERROR: "query" is required and must be a non-empty string'
+
+    url = "https://api.duckduckgo.com/"
+    try:
+        resp = requests.get(
+            url,
+            params={
+                "q": text,
+                "format": "json",
+                "no_html": 1,
+                "no_redirect": 1,
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as exc:
+        return f"ERROR: internet search request failed ({exc})"
+    except ValueError:
+        return "ERROR: internet search returned invalid JSON"
+
+    lines: list[str] = []
+
+    abstract = data.get("AbstractText")
+    abstract_url = data.get("AbstractURL")
+    if isinstance(abstract, str) and abstract.strip():
+        if isinstance(abstract_url, str) and abstract_url.strip():
+            lines.append(f"Answer: {abstract.strip()} (Source: {abstract_url.strip()})")
+        else:
+            lines.append(f"Answer: {abstract.strip()}")
+
+    related = data.get("RelatedTopics")
+    if isinstance(related, list):
+        for topic in related:
+            if len(lines) >= 4:
+                break
+
+            if not isinstance(topic, dict):
+                continue
+
+            if "Topics" in topic and isinstance(topic.get("Topics"), list):
+                nested_topics = topic.get("Topics", [])
+            else:
+                nested_topics = [topic]
+
+            for item in nested_topics:
+                if len(lines) >= 4:
+                    break
+                if not isinstance(item, dict):
+                    continue
+                topic_text = item.get("Text")
+                first_url = item.get("FirstURL")
+                if isinstance(topic_text, str) and topic_text.strip():
+                    if isinstance(first_url, str) and first_url.strip():
+                        lines.append(f"- {topic_text.strip()} ({first_url.strip()})")
+                    else:
+                        lines.append(f"- {topic_text.strip()}")
+
+    if not lines:
+        return f'ERROR: no search results found for "{text}"'
+
+    return "Internet search results:\n" + "\n".join(lines[:4])
+
+
 ALLOWED_BIN_OPS: dict[type[ast.AST], Any] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -403,6 +477,12 @@ def execute_tool(tool: str, arguments: dict[str, Any] | None) -> str:
         if not isinstance(expression, str):
             return 'ERROR: "expression" is required and must be a string'
         return safe_calculate(expression)
+
+    if tool == "internet_search":
+        query = args.get("query")
+        if not isinstance(query, str):
+            return 'ERROR: "query" is required and must be a string'
+        return internet_search(query)
 
     if tool == "get_weather":
         city = args.get("city")
