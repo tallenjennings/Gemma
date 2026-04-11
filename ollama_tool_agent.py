@@ -196,6 +196,21 @@ def parse_model_response(raw_text: str) -> ParsedResponse:
             if isinstance(content, str):
                 return ParsedResponse(kind="final", raw_text=raw_text, content=content)
 
+        # Compatibility fallbacks for common malformed-but-structured replies.
+        legacy_tool = parsed_obj.get("tool_call")
+        legacy_args = parsed_obj.get("arguments", {})
+        if isinstance(legacy_tool, str) and isinstance(legacy_args, dict):
+            return ParsedResponse(
+                kind="tool_call",
+                raw_text=raw_text,
+                tool=legacy_tool,
+                arguments=legacy_args,
+            )
+
+        legacy_final = parsed_obj.get("final")
+        if isinstance(legacy_final, str):
+            return ParsedResponse(kind="final", raw_text=raw_text, content=legacy_final)
+
     # Fallback: natural-language final answer.
     return ParsedResponse(kind="final", raw_text=raw_text, content=text or raw_text)
 
