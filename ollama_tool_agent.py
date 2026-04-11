@@ -79,6 +79,35 @@ class ParsedResponse:
     content: str | None = None
 
 
+def coerce_tool_arguments(tool: str, raw_arguments: Any) -> dict[str, Any] | None:
+    """
+    Normalize malformed tool arguments into the expected dict shape.
+
+    Returns:
+    - dict when arguments can be normalized
+    - None when they cannot
+    """
+    if isinstance(raw_arguments, dict):
+        return raw_arguments
+
+    # Common model mistake: provide a single string instead of an object.
+    if isinstance(raw_arguments, str):
+        key_by_tool = {
+            "internet_search": "query",
+            "calculator": "expression",
+            "echo": "text",
+            "get_weather": "city",
+            "powershell_access": "command",
+            "get_current_time": "timezone",
+        }
+        key = key_by_tool.get(tool)
+        if key is None:
+            return None
+        return {key: raw_arguments}
+
+    return None
+
+
 def debug_log(debug: bool, message: str) -> None:
     """Print debug output when enabled."""
     if debug:
@@ -184,12 +213,15 @@ def parse_model_response(raw_text: str) -> ParsedResponse:
         if msg_type == "tool_call":
             tool = parsed_obj.get("tool")
             arguments = parsed_obj.get("arguments", {})
-            if isinstance(tool, str) and isinstance(arguments, dict):
+            normalized_arguments = (
+                coerce_tool_arguments(tool, arguments) if isinstance(tool, str) else None
+            )
+            if isinstance(tool, str) and normalized_arguments is not None:
                 return ParsedResponse(
                     kind="tool_call",
                     raw_text=raw_text,
                     tool=tool,
-                    arguments=arguments,
+                    arguments=normalized_arguments,
                 )
         elif msg_type == "final":
             content = parsed_obj.get("content")
@@ -199,12 +231,15 @@ def parse_model_response(raw_text: str) -> ParsedResponse:
         # Compatibility fallbacks for common malformed-but-structured replies.
         legacy_tool = parsed_obj.get("tool_call")
         legacy_args = parsed_obj.get("arguments", {})
-        if isinstance(legacy_tool, str) and isinstance(legacy_args, dict):
+        normalized_legacy_args = (
+            coerce_tool_arguments(legacy_tool, legacy_args) if isinstance(legacy_tool, str) else None
+        )
+        if isinstance(legacy_tool, str) and normalized_legacy_args is not None:
             return ParsedResponse(
                 kind="tool_call",
                 raw_text=raw_text,
                 tool=legacy_tool,
-                arguments=legacy_args,
+                arguments=normalized_legacy_args,
             )
 
         legacy_final = parsed_obj.get("final")
